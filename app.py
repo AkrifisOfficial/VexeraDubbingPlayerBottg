@@ -432,3 +432,19 @@ def ping_server():
 
 # В конец кода перед app.run()
 threading.Thread(target=ping_server, daemon=True).start()
+from flask_cors import CORS  # Импорт модуля CORS
+
+app = Flask(__name__)
+CORS(app)  # Разрешить все домены
+from flask import make_response
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+    return response
+
+@app.route('/submit', methods=['OPTIONS'])
+def handle_options():
+    return make_response(), 200
