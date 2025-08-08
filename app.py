@@ -4,11 +4,12 @@ import json
 import time
 from datetime import datetime
 from flask import Flask, request, jsonify
-from telegram import Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Dispatcher,
+    Application,
     CommandHandler,
     CallbackQueryHandler,
+    ContextTypes,
     CallbackContext
 )
 
@@ -20,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Конфигурация
-TOKEN = os.getenv("8058938968:AAE0GqiZWvsjdaYMHJAu3k3w-ciz_euUEMw")
+TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "").split(",") if id.strip()]
 DB_FILE = "applications_db.json"
 
@@ -33,11 +34,8 @@ application_counter = 1
 # Создаем Flask приложение
 app = Flask(__name__)
 
-from telegram.ext import ApplicationBuilder
-
 # Инициализация Telegram бота
-application = ApplicationBuilder().token(TOKEN).build()
-dispatcher = application
+telegram_app = Application.builder().token(TOKEN).build()
 
 # Инициализация базы данных
 def init_database():
@@ -72,12 +70,12 @@ def save_database():
 
 # Инициализация обработчиков команд
 def init_handlers():
-    dispatcher.add_handler(CommandHandler("start", start_command))
-    dispatcher.add_handler(CommandHandler("apps", show_applications))
-    dispatcher.add_handler(CommandHandler("approved", show_approved))
-    dispatcher.add_handler(CommandHandler("rejected", show_rejected))
-    dispatcher.add_handler(CommandHandler("help", help_command))
-    dispatcher.add_handler(CallbackQueryHandler(button_handler))
+    telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(CommandHandler("apps", show_applications))
+    telegram_app.add_handler(CommandHandler("approved", show_approved))
+    telegram_app.add_handler(CommandHandler("rejected", show_rejected))
+    telegram_app.add_handler(CommandHandler("help", help_command))
+    telegram_app.add_handler(CallbackQueryHandler(button_handler))
     logger.info("Обработчики команд инициализированы")
 
 # Клавиатура для действий с заявкой
@@ -94,10 +92,10 @@ def application_keyboard(app_id):
     ])
 
 # Команда старт
-def start_command(update: Update, context: CallbackContext) -> None:
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id in ADMIN_IDS:
-        update.message.reply_text(
+        await update.message.reply_text(
             "👋 Привет, администратор VexeraDubbing!\n\n"
             "📋 Доступные команды:\n"
             "/apps - Ожидающие заявки\n"
@@ -107,10 +105,10 @@ def start_command(update: Update, context: CallbackContext) -> None:
             "Для обработки заявок используйте кнопки под сообщениями."
         )
     else:
-        update.message.reply_text("❌ Этот бот предназначен только для администраторов команды озвучки.")
+        await update.message.reply_text("❌ Этот бот предназначен только для администраторов команды озвучки.")
 
 # Команда помощи
-def help_command(update: Update, context: CallbackContext) -> None:
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     help_text = (
         "ℹ️ Справочник администратора:\n\n"
         "/apps - Показать все ожидающие заявки\n"
@@ -122,49 +120,49 @@ def help_command(update: Update, context: CallbackContext) -> None:
         "📝 Подробнее - Показать детали заявки\n"
         "🗑️ Удалить - Удалить заявку из системы"
     )
-    update.message.reply_text(help_text)
+    await update.message.reply_text(help_text)
 
 # Показать ожидающие заявки
-def show_applications(update: Update, context: CallbackContext) -> None:
+async def show_applications(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        update.message.reply_text("❌ У вас нет прав для просмотра заявок")
+        await update.message.reply_text("❌ У вас нет прав для просмотра заявок")
         return
 
     if not PENDING_APPLICATIONS:
-        update.message.reply_text("ℹ️ В настоящее время нет ожидающих заявок.")
+        await update.message.reply_text("ℹ️ В настоящее время нет ожидающих заявок.")
         return
 
     for app_id in PENDING_APPLICATIONS:
-        send_application_message(update, context, PENDING_APPLICATIONS[app_id])
+        await send_application_message(update, context, PENDING_APPLICATIONS[app_id])
 
 # Показать одобренные заявки
-def show_approved(update: Update, context: CallbackContext) -> None:
+async def show_approved(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        update.message.reply_text("❌ У вас нет прав для просмотра заявок")
+        await update.message.reply_text("❌ У вас нет прав для просмотра заявок")
         return
 
     if not APPROVED_APPLICATIONS:
-        update.message.reply_text("ℹ️ Пока нет одобренных заявок.")
+        await update.message.reply_text("ℹ️ Пока нет одобренных заявок.")
         return
 
     for app_id in APPROVED_APPLICATIONS:
-        send_application_message(update, context, APPROVED_APPLICATIONS[app_id], approved=True)
+        await send_application_message(update, context, APPROVED_APPLICATIONS[app_id], approved=True)
 
 # Показать отклоненные заявки
-def show_rejected(update: Update, context: CallbackContext) -> None:
+async def show_rejected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     if user_id not in ADMIN_IDS:
-        update.message.reply_text("❌ У вас нет прав для просмотра заявок")
+        await update.message.reply_text("❌ У вас нет прав для просмотра заявок")
         return
 
     if not REJECTED_APPLICATIONS:
-        update.message.reply_text("ℹ️ Пока нет отклоненных заявок.")
+        await update.message.reply_text("ℹ️ Пока нет отклоненных заявок.")
         return
 
     for app_id in REJECTED_APPLICATIONS:
-        send_application_message(update, context, REJECTED_APPLICATIONS[app_id], rejected=True)
+        await send_application_message(update, context, REJECTED_APPLICATIONS[app_id], rejected=True)
 
 # Форматирование заявки
 def format_application(application, detailed=False):
@@ -196,14 +194,14 @@ def format_application(application, detailed=False):
     return message
 
 # Отправка сообщения с заявкой
-def send_application_message(update, context, application, approved=False, rejected=False):
+async def send_application_message(update, context, application, approved=False, rejected=False):
     message = format_application(application)
     
     keyboard = None
     if not approved and not rejected:
         keyboard = application_keyboard(application['id'])
     
-    context.bot.send_message(
+    await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=message,
         reply_markup=keyboard,
@@ -211,15 +209,15 @@ def send_application_message(update, context, application, approved=False, rejec
     )
 
 # Обработка действий с заявкой
-def button_handler(update: Update, context: CallbackContext) -> None:
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    query.answer()
+    await query.answer()
     data = query.data.split("_")
     action = data[0]
     app_id = data[1]
     
     if query.from_user.id not in ADMIN_IDS:
-        query.edit_message_text("❌ У вас нет прав для обработки заявок")
+        await query.edit_message_text("❌ У вас нет прав для обработки заявок")
         return
 
     application = None
@@ -237,7 +235,7 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         source = 'rejected'
     
     if not application:
-        query.edit_message_text("⚠️ Заявка не найдена")
+        await query.edit_message_text("⚠️ Заявка не найдена")
         return
 
     admin_name = query.from_user.first_name
@@ -258,13 +256,13 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         
         # Обновляем сообщение
         new_text = format_application(application, detailed=True)
-        query.edit_message_text(
+        await query.edit_message_text(
             text=new_text + "\n\n✅ Заявка одобрена!",
             parse_mode='Markdown'
         )
         
         # Уведомление другим админам
-        notify_admins(f"👤 {admin_name} одобрил заявку #{app_id}")
+        await notify_admins(f"👤 {admin_name} одобрил заявку #{app_id}")
 
     elif action == "reject":
         # Перемещаем заявку в отклоненные
@@ -279,17 +277,17 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         
         REJECTED_APPLICATIONS[app_id] = application
         
-        query.edit_message_text(
+        await query.edit_message_text(
             text=f"❌ Заявка #{app_id} отклонена",
             parse_mode='Markdown'
         )
-        notify_admins(f"👤 {admin_name} отклонил заявку #{app_id}")
+        await notify_admins(f"👤 {admin_name} отклонил заявку #{app_id}")
 
     elif action == "details":
         new_text = format_application(application, detailed=True)
         keyboard = None if application.get('approved') or application.get('rejected') else application_keyboard(app_id)
         
-        query.edit_message_text(
+        await query.edit_message_text(
             text=new_text,
             reply_markup=keyboard,
             parse_mode='Markdown'
@@ -304,20 +302,20 @@ def button_handler(update: Update, context: CallbackContext) -> None:
         elif source == 'rejected' and app_id in REJECTED_APPLICATIONS:
             del REJECTED_APPLICATIONS[app_id]
         
-        query.edit_message_text(
+        await query.edit_message_text(
             text=f"🗑️ Заявка #{app_id} удалена",
             parse_mode='Markdown'
         )
-        notify_admins(f"👤 {admin_name} удалил заявку #{app_id}")
+        await notify_admins(f"👤 {admin_name} удалил заявку #{app_id}")
     
     # Сохраняем изменения в БД
     save_database()
 
 # Уведомление администраторов
-def notify_admins(message: str):
+async def notify_admins(message: str):
     for admin_id in ADMIN_IDS:
         try:
-            bot.send_message(
+            await telegram_app.bot.send_message(
                 chat_id=admin_id,
                 text=message,
                 parse_mode='Markdown'
@@ -362,11 +360,14 @@ def webhook_handler():
         # Отправляем всем админам
         for admin_id in ADMIN_IDS:
             try:
-                bot.send_message(
-                    chat_id=admin_id,
-                    text=format_application(application),
-                    reply_markup=application_keyboard(app_id),
-                    parse_mode='Markdown'
+                # Используем асинхронный запуск
+                telegram_app.create_task(
+                    telegram_app.bot.send_message(
+                        chat_id=admin_id,
+                        text=format_application(application),
+                        reply_markup=application_keyboard(app_id),
+                        parse_mode='Markdown'
+                    )
                 )
             except Exception as e:
                 logger.error(f"Ошибка отправки заявки админу {admin_id}: {e}")
@@ -389,9 +390,10 @@ def webhook_handler():
 
 # Эндпоинт для обработки обновлений Telegram
 @app.route('/telegram', methods=['POST'])
-def telegram_webhook():
-    update = Update.de_json(request.get_json(), bot)
-    dispatcher.process_update(update)
+async def telegram_webhook():
+    json_data = await request.get_json()
+    update = Update.de_json(json_data, telegram_app.bot)
+    await telegram_app.process_update(update)
     return 'ok', 200
 
 # Статус сервера
@@ -413,10 +415,6 @@ if __name__ == '__main__':
     
     # Инициализация обработчиков
     init_handlers()
-    
-    # Настройка вебхука (если используется)
-    # bot.delete_webhook()
-    # bot.set_webhook(url="https://your-render-url.onrender.com/telegram")
     
     # Запуск Flask сервера
     port = int(os.environ.get('PORT', 10000))
