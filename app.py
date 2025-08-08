@@ -33,9 +33,11 @@ application_counter = 1
 # Создаем Flask приложение
 app = Flask(__name__)
 
+from telegram.ext import ApplicationBuilder
+
 # Инициализация Telegram бота
-bot = Bot(token=TOKEN)
-dispatcher = Dispatcher(bot, None, workers=0)
+application = ApplicationBuilder().token(TOKEN).build()
+dispatcher = application
 
 # Инициализация базы данных
 def init_database():
