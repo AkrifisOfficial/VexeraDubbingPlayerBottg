@@ -419,3 +419,16 @@ if __name__ == '__main__':
     # Запуск Flask сервера
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
+import threading
+import requests
+
+def ping_server():
+    while True:
+        try:
+            requests.get("https://vexeradubbingplayerbotts.onrender.com")
+            time.sleep(300)  # 5 минут
+        except:
+            pass
+
+# В конец кода перед app.run()
+threading.Thread(target=ping_server, daemon=True).start()
