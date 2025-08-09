@@ -1,8 +1,5 @@
 import os
-import threading
 import logging
-import sys
-from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -13,33 +10,20 @@ from telegram.ext import (
     filters
 )
 
+# Настройки из переменных окружения
+BOT_TOKEN = os.environ['8088128218:AAEZLKRnlKXpo8aPO2uEzQfk1Ik12ubDKrE']
+ADMIN_CHAT_ID = os.environ['5847388657,7911072378,1884069432,6546229720,1110658250']
+
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO,
-    stream=sys.stdout  # Важно для Render
+    level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
-# Проверка переменных окружения ДО создания Flask-приложения
-BOT_TOKEN = os.environ.get('8088128218:AAEZLKRnlKXpo8aPO2uEzQfk1Ik12ubDKrE')
-ADMIN_CHAT_ID = os.environ.get('5847388657,7911072378,1884069432,6546229720,1110658250')
-PORT = int(os.environ.get('PORT', 5000))
-
-# Проверка обязательных переменных
-if not BOT_TOKEN or not ADMIN_CHAT_ID:
-    logger.error("CRITICAL ERROR: Missing required environment variables!")
-    logger.info("Please set BOT_TOKEN and ADMIN_CHAT_ID in Render environment variables")
-    # Выходим с ошибкой, если переменные не установлены
-    sys.exit(1)
-
-# Инициализация Flask
-app = Flask(__name__)
 
 # Хранилище заявок
 applications = {}
 
-# Функции бота
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     await update.message.reply_text(
@@ -150,60 +134,20 @@ async def list_applications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(response, parse_mode='Markdown')
 
-def run_bot():
-    logger.info("Starting Telegram bot...")
-    logger.info(f"Using BOT_TOKEN: {BOT_TOKEN[:5]}...{BOT_TOKEN[-5:]}")
-    logger.info(f"Using ADMIN_CHAT_ID: {ADMIN_CHAT_ID}")
+def main():
+    # Создание приложения
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    try:
-        # Создание приложения
-        application = ApplicationBuilder().token(BOT_TOKEN).build()
-        
-        # Регистрация обработчиков
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CommandHandler("help", help_command))
-        application.add_handler(CommandHandler("list", list_applications))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_application))
-        application.add_handler(CallbackQueryHandler(button_handler))
-        
-        # Запуск бота
-        logger.info("VexeraDubbing Bot is running!")
-        application.run_polling()
-    except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
-        # В случае ошибки перезапустим через 30 секунд
-        threading.Timer(30.0, run_bot).start()
-
-@app.route('/')
-def home():
-    return "VexeraDubbing Telegram Bot is running!"
-
-@app.route('/health')
-def health_check():
-    return jsonify({
-        "status": "running",
-        "bot": "active" if hasattr(app, 'bot_running') else "inactive",
-        "applications_count": len(applications)
-    }), 200
-
-@app.route('/env-check')
-def env_check():
-    """Эндпоинт для проверки переменных окружения (только для отладки)"""
-    return jsonify({
-        "BOT_TOKEN_exists": bool(BOT_TOKEN),
-        "ADMIN_CHAT_ID_exists": bool(ADMIN_CHAT_ID),
-        "PORT": PORT
-    }), 200
+    # Регистрация обработчиков
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("list", list_applications))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_application))
+    application.add_handler(CallbackQueryHandler(button_handler))
+    
+    # Запуск бота
+    logger.info("VexeraDubbing Bot is running!")
+    application.run_polling()
 
 if __name__ == '__main__':
-    # Запускаем бот в отдельном потоке
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # Помечаем, что бот запущен
-    app.bot_running = True
-    
-    # Запускаем Flask-сервер
-    logger.info(f"Starting Flask server on port {PORT}")
-    app.run(host='0.0.0.0', port=PORT)
+    main()
