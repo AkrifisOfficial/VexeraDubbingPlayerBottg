@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Конфигурация
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("8058938968:AAE0GqiZWvsjdaYMHJAu3k3w-ciz_euUEMw")
 ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "").split(",") if id.strip()]
 DB_FILE = "applications_db.json"
 
