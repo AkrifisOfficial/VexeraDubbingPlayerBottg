@@ -1,5 +1,6 @@
 import os
 import logging
+import sys
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,33 +11,69 @@ from telegram.ext import (
     filters
 )
 
-# Настройки из переменных окружения
-BOT_TOKEN = os.environ['BOT_TOKEN']
-ADMIN_CHAT_ID = os.environ['ADMIN_CHAT_ID']
-
 # Настройка логирования
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    stream=sys.stdout
 )
 logger = logging.getLogger(__name__)
-logger.info("Starting VexeraDubbing Bot initialization...")
+
+# Проверка переменных окружения
+try:
+    BOT_TOKEN = os.environ['BOT_TOKEN']
+    ADMIN_CHAT_IDS = [int(id.strip()) for id in os.environ['ADMIN_CHAT_IDS'].split(',')]
+    logger.info("Environment variables loaded successfully")
+    logger.info(f"BOT_TOKEN: {BOT_TOKEN[:5]}...{BOT_TOKEN[-5:]}")
+    logger.info(f"ADMIN_CHAT_IDS: {ADMIN_CHAT_IDS}")
+except KeyError as e:
+    logger.critical(f"Missing environment variable: {e}")
+    sys.exit(1)
 
 # Хранилище заявок
 applications = {}
 
+# Проверка прав администратора
+def is_admin(user_id: int) -> bool:
+    """Проверяет, является ли пользователь администратором"""
+    return user_id in ADMIN_CHAT_IDS
+
+async def admin_only(update: Update, context: ContextTypes.DEFAULT_TYPE, func) -> None:
+    """Проверяет права перед выполнением команды"""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        logger.warning(f"Unauthorized access attempt by user: {user_id}")
+        await update.message.reply_text("🚫 У вас нет прав для выполнения этой команды")
+        return
+    await func(update, context)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"Command /start from user: {user.id}")
-    await update.message.reply_text(
-        f"👋 Привет, {user.first_name}! Я бот для управления заявками VexeraDubbing.\n\n"
-        "🔧 Доступные команды:\n"
-        "/list - список заявок\n"
-        "/help - справка по командам"
-    )
+    
+    if is_admin(user.id):
+        response = (
+            f"👋 Привет, администратор {user.first_name}!\n\n"
+            "🔧 Доступные команды:\n"
+            "/list - список заявок\n"
+            "/help - справка по командам"
+        )
+    else:
+        response = (
+            f"👋 Привет, {user.first_name}!\n"
+            "Это служебный бот для управления заявками VexeraDubbing.\n\n"
+            "❌ У вас нет прав для использования этого бота.\n"
+            "Обратитесь к администратору для получения доступа."
+        )
+    
+    await update.message.reply_text(response)
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.info(f"Command /help from user: {update.effective_user.id}")
+    # Обернем в проверку прав
+    await admin_only(update, context, _help_command)
+
+async def _help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info(f"Command /help from admin: {update.effective_user.id}")
     help_text = (
         "🛠️ Команды администратора:\n\n"
         "/list - показать активные заявки\n"
@@ -79,13 +116,18 @@ async def handle_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Отправка уведомления
-        await context.bot.send_message(
-            chat_id=ADMIN_CHAT_ID,
-            text=f"📬 *Новая заявка* `{app_id}`\n_Используйте кнопки для управления_",
-            reply_markup=reply_markup,
-            parse_mode='Markdown'
-        )
+        # Отправка уведомления всем администраторам
+        for admin_id in ADMIN_CHAT_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"📬 *Новая заявка* `{app_id}`\n_Используйте кнопки для управления_",
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
+                logger.info(f"Notification sent to admin: {admin_id}")
+            except Exception as e:
+                logger.error(f"Failed to send notification to admin {admin_id}: {str(e)}")
         
         logger.info(f"New application processed: {app_id}")
         
@@ -95,6 +137,12 @@ async def handle_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
+    # Проверяем права пользователя
+    if not is_admin(query.from_user.id):
+        logger.warning(f"Unauthorized button press by user: {query.from_user.id}")
+        await query.edit_message_text("🚫 У вас нет прав для выполнения этого действия")
+        return
     
     try:
         action, app_id = query.data.split('_', 1)
@@ -135,8 +183,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in button handler: {str(e)}", exc_info=True)
 
 async def list_applications(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Обернем в проверку прав
+    await admin_only(update, context, _list_applications)
+
+async def _list_applications(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
-        logger.info(f"Command /list from user: {update.effective_user.id}")
+        logger.info(f"Command /list from admin: {update.effective_user.id}")
         
         if not applications:
             await update.message.reply_text("📭 Нет активных заявок!")
@@ -158,7 +210,7 @@ async def list_applications(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in list_applications: {str(e)}", exc_info=True)
 
 def main():
-    logger.info("Creating Telegram application...")
+    logger.info("===== Starting VexeraDubbing Bot =====")
     
     try:
         # Создание приложения
@@ -174,20 +226,13 @@ def main():
         # Запуск бота
         logger.info("Starting bot polling...")
         application.run_polling()
-        logger.info("Bot polling started")
         
     except Exception as e:
         logger.critical(f"Failed to start bot: {str(e)}", exc_info=True)
-        raise
+        # Перезапуск через 30 секунд
+        import time
+        time.sleep(30)
+        main()
 
 if __name__ == '__main__':
-    logger.info("===== Starting VexeraDubbing Bot =====")
-    logger.info(f"Using BOT_TOKEN: {BOT_TOKEN[:5]}...{BOT_TOKEN[-5:]}")
-    logger.info(f"Using ADMIN_CHAT_ID: {ADMIN_CHAT_ID}")
-    
-    try:
-        main()
-    except Exception as e:
-        logger.error(f"Bot crashed: {str(e)}", exc_info=True)
-        logger.info("Restarting in 10 seconds...")
-        # В Railway автоматический перезапуск
+    main()
