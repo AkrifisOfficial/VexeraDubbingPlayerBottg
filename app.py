@@ -11,8 +11,8 @@ from telegram.ext import (
 )
 
 # Настройки из переменных окружения
-BOT_TOKEN = os.environ.get('BOT_TOKEN')
-ADMIN_CHAT_ID = os.environ.get('ADMIN_CHAT_ID')
+BOT_TOKEN = os.environ.get('8088128218:AAEZLKRnlKXpo8aPO2uEzQfk1Ik12ubDKrE')
+ADMIN_CHAT_ID = os.environ.get('5847388657,7911072378,1884069432,6546229720,1110658250')
 
 # Настройка логирования
 logging.basicConfig(
