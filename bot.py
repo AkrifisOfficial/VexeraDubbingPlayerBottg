@@ -32,6 +32,7 @@ except KeyError as e:
 
 # Хранилище заявок
 applications = {}
+application_counter = 1
 
 # Проверка прав администратора
 def is_admin(user_id: int) -> bool:
@@ -56,6 +57,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"👋 Привет, администратор {user.first_name}!\n\n"
             "🔧 Доступные команды:\n"
             "/list - список заявок\n"
+            "/review [ID] - просмотреть заявку\n"
+            "/approve [ID] - принять заявку\n"
+            "/reject [ID] - отклонить заявку\n"
             "/help - справка по командам"
         )
     else:
@@ -85,6 +89,8 @@ async def _help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(help_text)
 
 async def handle_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global application_counter
+    
     try:
         logger.info("Received potential application message")
         
@@ -95,13 +101,15 @@ async def handle_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.info("Processing new application...")
         
         # Генерация ID заявки
-        app_id = f"APP-{len(applications)+1:04d}"
+        app_id = f"APP-{application_counter:04d}"
+        application_counter += 1
         
         # Сохранение заявки
         applications[app_id] = {
             "status": "pending",
             "data": update.message.text,
-            "telegram": next((line.split(': ')[1] for line in update.message.text.split('\n') if "Telegram" in line), "N/A")
+            "telegram": next((line.split(': ')[1] for line in update.message.text.split('\n') if "Telegram" in line), "N/A"),
+            "message_id": None  # Будем хранить ID сообщения с заявкой
         }
         
         # Клавиатура для управления
@@ -119,12 +127,14 @@ async def handle_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Отправка уведомления всем администраторам
         for admin_id in ADMIN_CHAT_IDS:
             try:
-                await context.bot.send_message(
+                message = await context.bot.send_message(
                     chat_id=admin_id,
                     text=f"📬 *Новая заявка* `{app_id}`\n_Используйте кнопки для управления_",
                     reply_markup=reply_markup,
                     parse_mode='Markdown'
                 )
+                # Сохраняем ID сообщения для будущих обновлений
+                applications[app_id]['message_id'] = message.message_id
                 logger.info(f"Notification sent to admin: {admin_id}")
             except Exception as e:
                 logger.error(f"Failed to send notification to admin {admin_id}: {str(e)}")
@@ -166,17 +176,34 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "approve":
             applications[app_id]['status'] = "approved"
             new_text = f"✅ *Заявка ПРИНЯТА* `{app_id}`\n\n{app_data}"
+            status_emoji = "✅"
         elif action == "reject":
             applications[app_id]['status'] = "rejected"
             new_text = f"❌ *Заявка ОТКЛОНЕНА* `{app_id}`\n\n{app_data}"
+            status_emoji = "❌"
         else:
             logger.warning(f"Unknown action: {action}")
             return
         
+        # Обновляем сообщение с заявкой
         await query.edit_message_text(
             text=new_text,
             parse_mode='Markdown'
         )
+        
+        # Обновляем все сообщения с этой заявкой у других администраторов
+        for admin_id in ADMIN_CHAT_IDS:
+            if admin_id != query.from_user.id:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=admin_id,
+                        message_id=applications[app_id]['message_id'],
+                        text=new_text,
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Error updating message for admin {admin_id}: {str(e)}")
+        
         logger.info(f"Application {app_id} {action}ed")
         
     except Exception as e:
@@ -209,6 +236,111 @@ async def _list_applications(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"Error in list_applications: {str(e)}", exc_info=True)
 
+async def review_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Обернем в проверку прав
+    await admin_only(update, context, _review_application)
+
+async def _review_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        logger.info(f"Command /review from admin: {update.effective_user.id}")
+        
+        if not context.args:
+            await update.message.reply_text("ℹ️ Использование: /review <ID заявки>")
+            return
+            
+        app_id = context.args[0].upper()  # Приводим к верхнему регистру
+        
+        if app_id not in applications:
+            await update.message.reply_text(f"⚠️ Заявка `{app_id}` не найдена", parse_mode='Markdown')
+            return
+            
+        app = applications[app_id]
+        status = {
+            "pending": "🟡 Ожидает",
+            "approved": "🟢 Принята",
+            "rejected": "🔴 Отклонена"
+        }[app['status']]
+        
+        response = (
+            f"📄 *Заявка {app_id}*\n"
+            f"Статус: {status}\n\n"
+            f"{app['data']}"
+        )
+        
+        # Добавляем кнопки действий
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Принять", callback_data=f"approve_{app_id}"),
+                InlineKeyboardButton("❌ Отклонить", callback_data=f"reject_{app_id}")
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(response, reply_markup=reply_markup, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error in review_application: {str(e)}", exc_info=True)
+
+async def approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Обернем в проверку прав
+    await admin_only(update, context, _approve_application)
+
+async def _approve_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _process_application_action(update, context, "approve")
+
+async def reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Обернем в проверку прав
+    await admin_only(update, context, _reject_application)
+
+async def _reject_application(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _process_application_action(update, context, "reject")
+
+async def _process_application_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
+    try:
+        if not context.args:
+            await update.message.reply_text(f"ℹ️ Использование: /{action} <ID заявки>")
+            return
+            
+        app_id = context.args[0].upper()  # Приводим к верхнему регистру
+        
+        if app_id not in applications:
+            await update.message.reply_text(f"⚠️ Заявка `{app_id}` не найдена", parse_mode='Markdown')
+            return
+            
+        app = applications[app_id]
+        
+        if action == "approve":
+            new_status = "approved"
+            status_text = "ПРИНЯТА"
+            status_emoji = "✅"
+        else:
+            new_status = "rejected"
+            status_text = "ОТКЛОНЕНА"
+            status_emoji = "❌"
+        
+        # Обновляем статус заявки
+        app['status'] = new_status
+        new_text = f"{status_emoji} *Заявка {status_text}* `{app_id}`\n\n{app['data']}"
+        
+        # Обновляем все сообщения с этой заявкой у администраторов
+        for admin_id in ADMIN_CHAT_IDS:
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=admin_id,
+                    message_id=app['message_id'],
+                    text=new_text,
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Error updating message for admin {admin_id}: {str(e)}")
+        
+        # Отправляем подтверждение
+        await update.message.reply_text(f"{status_emoji} Заявка `{app_id}` успешно {status_text.lower()}!", parse_mode='Markdown')
+        logger.info(f"Application {app_id} {action}d via command")
+        
+    except Exception as e:
+        logger.error(f"Error in {action}_application: {str(e)}", exc_info=True)
+
 def main():
     logger.info("===== Starting VexeraDubbing Bot =====")
     
@@ -220,6 +352,9 @@ def main():
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CommandHandler("help", help_command))
         application.add_handler(CommandHandler("list", list_applications))
+        application.add_handler(CommandHandler("review", review_application))
+        application.add_handler(CommandHandler("approve", approve_application))
+        application.add_handler(CommandHandler("reject", reject_application))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_application))
         application.add_handler(CallbackQueryHandler(button_handler))
         
