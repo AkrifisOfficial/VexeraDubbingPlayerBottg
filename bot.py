@@ -1,7 +1,6 @@
 import os
 import logging
 import sys
-import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -24,12 +23,9 @@ logger = logging.getLogger(__name__)
 try:
     BOT_TOKEN = os.environ['BOT_TOKEN']
     ADMIN_CHAT_IDS = [int(id.strip()) for id in os.environ['ADMIN_CHAT_IDS'].split(',')]
-    GROUP_CHAT_ID = os.environ['GROUP_CHAT_ID']  # ID группы для заявок
-    
     logger.info("Environment variables loaded successfully")
     logger.info(f"BOT_TOKEN: {BOT_TOKEN[:5]}...{BOT_TOKEN[-5:]}")
     logger.info(f"ADMIN_CHAT_IDS: {ADMIN_CHAT_IDS}")
-    logger.info(f"GROUP_CHAT_ID: {GROUP_CHAT_ID}")
 except KeyError as e:
     logger.critical(f"Missing environment variable: {e}")
     sys.exit(1)
@@ -101,18 +97,11 @@ async def handle_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Генерация ID заявки
         app_id = f"APP-{len(applications)+1:04d}"
         
-        # Извлечение Telegram username из заявки
-        telegram_username = "N/A"
-        telegram_match = re.search(r"Telegram: (@?\w+)", update.message.text)
-        if telegram_match:
-            telegram_username = telegram_match.group(1).strip('@')
-        
         # Сохранение заявки
         applications[app_id] = {
             "status": "pending",
             "data": update.message.text,
-            "telegram": telegram_username,
-            "message_id": update.message.message_id  # ID сообщения в группе
+            "telegram": next((line.split(': ')[1] for line in update.message.text.split('\n') if "Telegram" in line), "N/A")
         }
         
         # Клавиатура для управления
@@ -127,17 +116,18 @@ async def handle_application(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Отправка уведомления в группу
-        try:
-            await context.bot.send_message(
-                chat_id=GROUP_CHAT_ID,
-                text=f"📬 *Новая заявка* `{app_id}`\n_Используйте кнопки для управления_",
-                reply_markup=reply_markup,
-                parse_mode='Markdown'
-            )
-            logger.info(f"Notification sent to group: {GROUP_CHAT_ID}")
-        except Exception as e:
-            logger.error(f"Failed to send notification to group: {str(e)}")
+        # Отправка уведомления всем администраторам
+        for admin_id in ADMIN_CHAT_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"📬 *Новая заявка* `{app_id}`\n_Используйте кнопки для управления_",
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
+                logger.info(f"Notification sent to admin: {admin_id}")
+            except Exception as e:
+                logger.error(f"Failed to send notification to admin {admin_id}: {str(e)}")
         
         logger.info(f"New application processed: {app_id}")
         
@@ -163,66 +153,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Application not found: {app_id}")
             return
         
-        app_data = applications[app_id]
-        full_text = app_data['data']
+        app_data = applications[app_id]['data']
         
         if action == "view":
             await query.edit_message_text(
-                text=f"📄 *Заявка {app_id}:*\n\n{full_text}",
+                text=f"📄 *Заявка {app_id}:*\n\n{app_data}",
                 reply_markup=query.message.reply_markup,
                 parse_mode='Markdown'
             )
             return
         
-        user_notification = None
-        
         if action == "approve":
             applications[app_id]['status'] = "approved"
-            new_text = f"✅ *Заявка ПРИНЯТА* `{app_id}`\n\n{full_text}"
-            user_notification = (
-                "🎉 Ваша заявка в VexeraDubbing принята!\n\n"
-                "С вами свяжется наш менеджер в ближайшее время."
-            )
-            
+            new_text = f"✅ *Заявка ПРИНЯТА* `{app_id}`\n\n{app_data}"
         elif action == "reject":
             applications[app_id]['status'] = "rejected"
-            new_text = f"❌ *Заявка ОТКЛОНЕНА* `{app_id}`\n\n{full_text}"
-            user_notification = (
-                "⚠️ Ваша заявка в VexeraDubbing отклонена.\n\n"
-                "Спасибо за интерес к нашему проекту!"
-            )
+            new_text = f"❌ *Заявка ОТКЛОНЕНА* `{app_id}`\n\n{app_data}"
         else:
             logger.warning(f"Unknown action: {action}")
             return
         
-        # Обновляем сообщение в группе
         await query.edit_message_text(
             text=new_text,
             parse_mode='Markdown'
         )
         logger.info(f"Application {app_id} {action}ed")
-        
-        # Отправляем уведомление пользователю
-        if user_notification and app_data['telegram'] != "N/A":
-            try:
-                # Пытаемся отправить напрямую
-                await context.bot.send_message(
-                    chat_id=f"@{app_data['telegram']}",
-                    text=user_notification
-                )
-                logger.info(f"Notification sent to user: @{app_data['telegram']}")
-            except Exception as e:
-                logger.error(f"Failed to send DM to @{app_data['telegram']}: {str(e)}")
-                
-                # Если не получилось, отправляем в группу
-                try:
-                    await context.bot.send_message(
-                        chat_id=GROUP_CHAT_ID,
-                        text=f"Пользователь @{app_data['telegram']} не доступен для DM. Уведомление:\n\n{user_notification}",
-                        reply_to_message_id=app_data['message_id']
-                    )
-                except Exception as e2:
-                    logger.error(f"Failed to send group notification: {str(e2)}")
         
     except Exception as e:
         logger.error(f"Error in button handler: {str(e)}", exc_info=True)
@@ -247,7 +202,7 @@ async def _list_applications(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "rejected": "🔴 Отклонена"
             }[app['status']]
             
-            response += f"• `{app_id}` - {status} - @{app['telegram']}\n"
+            response += f"• `{app_id}` - {status}\n"
         
         await update.message.reply_text(response, parse_mode='Markdown')
         
